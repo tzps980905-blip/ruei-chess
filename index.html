@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>戰術棋盤 - 殲滅戰正式版</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        :root { --p1: #3498db; --p2: #e74c3c; --bg: #121212; }
+        body { font-family: sans-serif; background: var(--bg); color: white; text-align: center; margin: 0; overflow: hidden; }
+        #nav-bar { height: 70px; background: #222; border-bottom: 2px solid #444; display: flex; flex-direction: column; justify-content: center; }
+        .room-tag { font-size: 0.8rem; color: #aaa; margin-top: 3px; cursor: pointer; }
+        #board { display: grid; grid-template-columns: repeat(7, 1fr); width: 85vw; height: 85vw; max-width: 380px; max-height: 380px; margin: 10px auto; gap: 2px; background: #444; }
+        .cell { background: #2a2a2a; display: flex; align-items: center; justify-content: center; position: relative; }
+        .piece { width: 80%; height: 80%; border-radius: 50%; transition: 0.1s; z-index: 10; pointer-events: none; } /* 讓棋子不擋住格子點擊 */
+        .p1 { background: var(--p1); box-shadow: 0 0 10px var(--p1); }
+        .p2 { background: var(--p2); box-shadow: 0 0 10px var(--p2); }
+        .selected { border: 3px solid #fff; box-shadow: 0 0 20px #fff; }
+        #controls { background: #1e1e1e; padding: 8px; position: fixed; bottom: 0; width: 100%; height: 170px; box-sizing: border-box; }
+        .btn-row { display: flex; justify-content: center; gap: 4px; margin-bottom: 6px; }
+        button { padding: 8px 10px; border-radius: 4px; border: none; background: #333; color: white; cursor: pointer; }
+        .active { background: #f1c40f !important; color: #000; font-weight: bold; }
+        #subBtn { width: 85%; background: #27ae60; font-weight: bold; padding: 12px; margin-top: 2px; }
+        #lobby { position: fixed; inset: 0; background: #1a1a1a; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; }
+    </style>
+</head>
+<body>
+
+    <div id="lobby">
+        <h2>⚔️ 戰術棋盤</h2>
+        <input type="text" id="pName" placeholder="輸入暱稱" style="padding:12px; border-radius:5px; margin-bottom:15px; border:none;">
+        <button onclick="start(true)" style="background:var(--p1); padding:15px 30px; font-size:1.1rem;">創建新房間</button>
+        <p style="margin:15px 0;">— 或輸入房號加入 —</p>
+        <div style="display:flex; gap:5px;"><input type="text" id="rCode" placeholder="6位房號" style="width:100px; padding:10px;"><button onclick="start(false)">加入</button></div>
+    </div>
+
+    <div id="nav-bar">
+        <div id="role-info">載入中...</div>
+        <div class="room-tag" id="room-display" onclick="copyRoom()">房號: <b id="room-id-text" style="color:#f1c40f; text-decoration:underline;">------</b></div>
+    </div>
+
+    <div id="game-status" style="color:#f1c40f; font-size: 0.9rem; padding: 5px; height: 20px;"></div>
+
+    <div id="board"></div>
+
+    <div id="controls" style="display:none;">
+        <div class="btn-row">
+            <button class="rps-b" onclick="sel('rps','rock',this)">✊ 石頭</button>
+            <button class="rps-b" onclick="sel('rps','paper',this)">✋ 布</button>
+            <button class="rps-b" onclick="sel('rps','scissors',this)">✌️ 剪刀</button>
+        </div>
+        <div class="btn-row" style="font-size: 0.85rem;">
+            <span>🚫 禁行對手：</span>
+            <button class="dir-b" onclick="sel('dir','up',this)">↑</button>
+            <button class="dir-b" onclick="sel('dir','down',this)">↓</button>
+            <button class="dir-b" onclick="sel('dir','left',this)">←</button>
+            <button class="dir-b" onclick="sel('dir','right',this)">→</button>
+        </div>
+        <button id="subBtn" onclick="submit()">確認提交</button>
+    </div>
+
+<script>
+    const socket = io();
+    let myRole, myRoom, curRPS, curDir, selectedPiece = null, gs = null;
+
+    function start(isNew) {
+        const name = document.getElementById('pName').value || "玩家";
+        const code = isNew ? Math.floor(100000 + Math.random() * 900000).toString() : document.getElementById('rCode').value;
+        if(code.length !== 6) return alert("房號格式錯誤");
+        myRoom = code;
+        socket.emit('joinRoom', { roomId: code, name, uuid: 'u'+Math.random() });
+        document.getElementById('lobby').style.display = 'none';
+        document.getElementById('room-id-text').innerText = code;
+    }
+
+    function copyRoom() {
+        navigator.clipboard.writeText(myRoom);
+        alert("房號已複製: " + myRoom);
+    }
+
+    socket.on('assignedRole', r => {
+        myRole = r;
+        document.getElementById('role-info').innerHTML = r === 'p1' ? `<b style="color:var(--p1)">🔵 你是藍方 (P1)</b>` : `<b style="color:var(--p2)">🔴 你是紅方 (P2)</b>`;
+    });
+
+    socket.on('gameState', data => {
+        gs = data;
+        render(data.board);
+        const status = document.getElementById('game-status');
+        const ctrl = document.getElementById('controls');
+        
+        if (data.winner) {
+            status.innerHTML = `<h2 style="color:#2ecc71">🏆 ${data.winner === 'p1' ? '藍方' : '紅方'} 勝利!</h2>`;
+            ctrl.style.display = 'none';
+            return;
+        }
+
+        if (data.phase === 'waiting') {
+            status.innerText = "正在等待對手加入...";
+        } else if (data.phase === 'rps') {
+            ctrl.style.display = 'block';
+            status.innerText = "選擇出招並封鎖對手方向";
+            resetUI();
+        } else if (data.phase.startsWith('move')) {
+            ctrl.style.display = 'none';
+            const isMyTurn = (data.phase === 'move_winner' && myRole === data.turnResult.winnerRole) || 
+                             (data.phase === 'move_loser' && myRole !== data.turnResult.winnerRole);
+            const forbidden = myRole === 'p1' ? data.turnResult.p1Forbidden : data.turnResult.p2Forbidden;
+            status.innerHTML = isMyTurn ? 
+                (data.phase === 'move_winner' ? "<b>你是贏家：請點擊我方棋子再點擊目標(可吃子)</b>" : `<b style="color:#ff4757">🚫 禁行 [${forbidden}]：請移動一顆棋子</b>`) : 
+                "對手行動中...";
+        }
+    });
+
+    function sel(t, v, b) {
+        const cls = t === 'rps' ? '.rps-b' : '.dir-b';
+        if(t === 'rps') curRPS = v; else curDir = v;
+        document.querySelectorAll(cls).forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+    }
+
+    function submit() {
+        if(!curRPS || !curDir) return alert("請選好猜拳與禁行方向！");
+        socket.emit('submitAction', { roomId: myRoom, rps: curRPS, limitDir: curDir });
+        document.getElementById('subBtn').disabled = true;
+        document.getElementById('game-status').innerText = "已送出，等待對手...";
+    }
+
+    function resetUI() {
+        document.getElementById('subBtn').disabled = false;
+        curRPS = curDir = null;
+        document.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    }
+
+    function render(board) {
+        const bDiv = document.getElementById('board');
+        bDiv.innerHTML = '';
+        board.forEach((row, r) => row.forEach((cell, c) => {
+            const div = document.createElement('div');
+            div.className = 'cell';
+            
+            // 如果這格有棋子
+            if(cell) {
+                const p = document.createElement('div');
+                p.className = `piece ${cell} ${selectedPiece?.r===r && selectedPiece?.c===c ? 'selected' : ''}`;
+                div.appendChild(p);
+            }
+            
+            // 點擊格子的邏輯
+            div.onclick = () => {
+                const occupant = gs.board[r][c];
+                
+                // 1. 如果點擊的是自己的棋子 -> 選擇棋子
+                if (occupant === myRole) {
+                    selectedPiece = {r, c};
+                    render(gs.board);
+                } 
+                // 2. 如果已經選了棋子，且點擊的是空格或敵方棋子 -> 嘗試移動/吃子
+                else if (selectedPiece) {
+                    handleMove(r, c);
+                }
+            };
+            bDiv.appendChild(div);
+        }));
+    }
+
+    function handleMove(r, c) {
+        const dr = r - selectedPiece.r, dc = c - selectedPiece.c;
+        const dirStr = dr===-1?'up':dr===1?'down':dc===-1?'left':dc===1?'right':'';
+        const forbidden = myRole === 'p1' ? gs.turnResult.p1Forbidden : gs.turnResult.p2Forbidden;
+        
+        // 驗證回合與禁行方向
+        const isMyTurn = (gs.phase === 'move_winner' && myRole === gs.turnResult.winnerRole) || 
+                         (gs.phase === 'move_loser' && myRole !== gs.turnResult.winnerRole);
+        if (!isMyTurn) return;
+        if (gs.phase === 'move_loser' && dirStr === forbidden) return alert("對手禁行了這個方向！");
+
+        // 必須是鄰近格
+        if (Math.abs(dr) + Math.abs(dc) === 1) {
+            socket.emit('movePiece', { roomId: myRoom, from: selectedPiece, to: {r, c} });
+            selectedPiece = null;
+        }
+    }
+</script>
+</body>
+</html>
