@@ -98,4 +98,7 @@ function checkWin(room) {
     if (p1 === 0) room.winner = 'p2'; if (p2 === 0) room.winner = 'p1';
 }
 
-server.listen(3000);
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on 0.0.0.0:${PORT}`);
+});
